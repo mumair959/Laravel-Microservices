@@ -6,7 +6,7 @@ The API Gateway is a centralized entry point that forwards client requests to mi
 
 The API Gateway:
 - Acts as a single entry point for all client requests
-- Forwards requests to appropriate microservices (Product Service, Order Service)
+- Forwards requests to appropriate microservices (Auth Service, Product Service, Order Service)
 - Handles error scenarios gracefully (timeouts, connection failures)
 - Prevents clients from needing to know individual service URLs
 - Maintains separation of concerns between services
@@ -15,6 +15,7 @@ The API Gateway:
 
 ```
 Client → API Gateway (port 8000) → Microservices
+                                   ├─ Auth Service (port 8003)
                                    ├─ Product Service (port 8001)
                                    └─ Order Service (port 8002)
 ```
@@ -26,6 +27,7 @@ Configure these in your `.env` file:
 ```
 PRODUCT_SERVICE_URL=http://127.0.0.1:8001
 ORDER_SERVICE_URL=http://127.0.0.1:8002
+AUTH_SERVICE_URL=http://127.0.0.1:8003
 ```
 
 ## Running the Gateway
@@ -73,6 +75,17 @@ All requests to order endpoints are forwarded to the Order Service:
 | GET | `/api/v1/orders` | Get all orders |
 | POST | `/api/v1/orders` | Create a new order |
 | GET | `/api/v1/orders/{id}` | Get order by ID |
+
+### Auth Service Forwarding
+
+All requests to auth endpoints are forwarded to the Auth Service:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/auth/register` | Register a new user |
+| POST | `/api/v1/auth/login` | Login and get authentication token |
+| GET | `/api/v1/auth/me` | Get current authenticated user (requires token) |
+| POST | `/api/v1/auth/logout` | Logout and revoke token (requires token) |
 
 ## Example Requests
 
@@ -128,6 +141,59 @@ curl -X POST http://127.0.0.1:8000/api/v1/orders \
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/orders/1
+```
+
+### Register a New User
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "John Doe",
+    "email": "john@example.com",
+    "password": "password123",
+    "password_confirmation": "password123"
+  }'
+```
+
+### Login
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "john@example.com",
+    "password": "password123"
+  }'
+```
+
+Response includes a `token` field:
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": 1,
+      "name": "John Doe",
+      "email": "john@example.com"
+    },
+    "token": "abc123def456..."
+  }
+}
+```
+
+### Get Current User (Protected)
+
+```bash
+curl http://127.0.0.1:8000/api/v1/auth/me \
+  -H "Authorization: Bearer abc123def456..."
+```
+
+### Logout (Protected)
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/auth/logout \
+  -H "Authorization: Bearer abc123def456..."
 ```
 
 ## Error Handling

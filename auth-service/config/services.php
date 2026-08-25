@@ -35,8 +35,4 @@ return [
         ],
     ],
 
-    'product_service_url' => env('PRODUCT_SERVICE_URL', 'http://127.0.0.1:8001'),
-    'order_service_url' => env('ORDER_SERVICE_URL', 'http://127.0.0.1:8002'),
-    'auth_service_url' => env('AUTH_SERVICE_URL', 'http://127.0.0.1:8003'),
-
 ];

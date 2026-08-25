@@ -20,3 +20,11 @@ Route::prefix('v1/orders')->group(function () {
     Route::post('/', [GatewayController::class, 'forwardOrderRequest']);
     Route::get('/{id}', [GatewayController::class, 'forwardOrderRequest']);
 });
+
+// Auth Service forwarding
+Route::prefix('v1/auth')->group(function () {
+    Route::post('/register', [GatewayController::class, 'forwardAuthRequest']);
+    Route::post('/login', [GatewayController::class, 'forwardAuthRequest']);
+    Route::get('/me', [GatewayController::class, 'forwardAuthRequest']);
+    Route::post('/logout', [GatewayController::class, 'forwardAuthRequest']);
+});
