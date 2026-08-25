@@ -21,8 +21,5 @@ class DatabaseSeeder extends Seeder
             'name' => 'Test User',
             'email' => 'test@example.com',
         ]);
-
-        // Seed orders
-        $this->call(OrderSeeder::class);
     }
 }
