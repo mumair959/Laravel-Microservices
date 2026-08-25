@@ -14,6 +14,10 @@ return [
     |
     */
 
+    'order_service' => [
+        'event_secret' => env('ORDER_SERVICE_EVENT_SECRET', 'local-secret'),
+    ],
+
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],

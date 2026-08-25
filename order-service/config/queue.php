@@ -15,6 +15,8 @@ return [
 
     'default' => env('QUEUE_CONNECTION', 'database'),
 
+    'order_queue' => env('ORDER_QUEUE', 'order-processing'),
+
     /*
     |--------------------------------------------------------------------------
     | Queue Connections

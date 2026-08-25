@@ -8,6 +8,9 @@ Laravel 13 REST service for creating and reading orders. Product details are obt
 - User-isolated order listing (users only see their own orders)
 - Order validation with Product Service integration
 - Automatic user_id assignment from authenticated Gateway header
+- **Event-driven asynchronous stock management via Laravel queues**
+- **OrderCreated events dispatched after successful order creation**
+- **Automatic event delivery to Product Service with retry logic**
 
 ## Setup
 
@@ -30,9 +33,12 @@ DB_DATABASE=order_db
 DB_USERNAME=root
 DB_PASSWORD=
 PRODUCT_SERVICE_URL=http://127.0.0.1:8001
+QUEUE_CONNECTION=database
+ORDER_QUEUE=order-processing
+PRODUCT_SERVICE_EVENT_SECRET=local-development-secret-change-in-production
 ```
 
-Run the migrations:
+Run the migrations (creates orders, order_items, jobs, and failed_jobs tables):
 
 ```bash
 php artisan migrate
@@ -43,6 +49,150 @@ Start Order Service on port 8002:
 ```bash
 php artisan serve --port=8002
 ```
+
+## Queue Configuration
+
+This service uses Laravel's **database queue driver** for event-driven communication with Product Service.
+
+### Queue Setup
+
+- **Queue Connection**: `database` (not Redis, Kafka, or RabbitMQ)
+- **Queue Name**: `order-processing`
+- **Queue Tables**: `jobs`, `failed_jobs` (in `order_db`)
+
+### Queue Environment Variables
+
+```dotenv
+QUEUE_CONNECTION=database
+ORDER_QUEUE=order-processing
+PRODUCT_SERVICE_URL=http://127.0.0.1:8001
+PRODUCT_SERVICE_EVENT_SECRET=<local-secret-must-match-product-service>
+```
+
+### Running the Queue Worker
+
+Start the queue worker in a separate terminal:
+
+```bash
+cd order-service
+php artisan queue:work database --queue=order-processing
+```
+
+The worker will process `PublishOrderCreated` jobs and deliver OrderCreated events to Product Service.
+
+### Retry Configuration
+
+- **Max Tries**: 3 attempts
+- **Backoff**: 60 seconds between retries
+- After 3 failed attempts, the job moves to `failed_jobs`
+
+### Failed Jobs
+
+View failed jobs:
+
+```bash
+php artisan queue:failed
+```
+
+Retry a failed job:
+
+```bash
+php artisan queue:retry <id>
+```
+
+Forget a failed job:
+
+```bash
+php artisan queue:forget <id>
+```
+
+## Event-Driven Architecture
+
+### OrderCreated Event
+
+When an order is successfully created, an `OrderCreated` event is dispatched:
+
+```json
+{
+    "event_id": "550e8400-e29b-41d4-a716-446655440000",
+    "event": "OrderCreated",
+    "order_id": 100,
+    "user_id": 15,
+    "items": [
+        {
+            "product_id": 1,
+            "quantity": 2
+        },
+        {
+            "product_id": 5,
+            "quantity": 1
+        }
+    ],
+    "total_amount": 2500.00
+}
+```
+
+Each event has a unique `event_id` (UUID) to enable idempotent processing.
+
+### Order Creation Flow
+
+1. **Client Request** → Order API endpoint
+2. **Validation** → Product Service stock check (synchronous)
+3. **Order Saved** → Database transaction commits
+4. **Event Dispatched** → `PublishOrderCreated` job queued
+5. **API Response** → 201 Created (returns immediately)
+6. **Queue Worker** → Processes job asynchronously
+7. **HTTP Delivery** → Sends event to Product Service
+8. **Product Service** → Receives and processes event asynchronously
+
+### PublishOrderCreated Job
+
+The `PublishOrderCreated` job is responsible for:
+
+1. Receiving order details from OrderCreated event
+2. Sending HTTP POST to `POST /api/internal/events/order-created` on Product Service
+3. Including service authentication header `X-Service-Secret`
+4. Handling network failures and timeouts
+5. Allowing Laravel queue system to retry on failure
+
+Service-to-service authentication:
+
+```
+POST /api/internal/events/order-created HTTP/1.1
+Host: 127.0.0.1:8001
+Content-Type: application/json
+X-Service-Secret: <PRODUCT_SERVICE_EVENT_SECRET>
+
+{
+    "event_id": "...",
+    "event": "OrderCreated",
+    "order_id": 100,
+    ...
+}
+```
+
+### Eventual Consistency
+
+**Important**: Stock updates are **NOT** synchronous.
+
+- Order creation succeeds immediately
+- Product stock is updated asynchronously
+- There is a time lag between order creation and stock reduction
+- This is intentional for performance and resilience
+
+Example timeline:
+
+```
+T0: Order created (API returns 201)
+T1: OrderCreated job queued
+T2: Queue worker processes job
+T3: Event sent to Product Service
+T4: Product Service receives event
+T5: Product Service queues stock update job
+T6: Product Service worker updates stock
+```
+
+Users are not expected to see updated stock immediately after order creation.
 
 ## API
 

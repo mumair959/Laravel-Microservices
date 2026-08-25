@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreOrderRequest;
+use App\Jobs\PublishOrderCreated;
 use App\Models\Order;
 use App\Services\ProductServiceClient;
 use Illuminate\Database\DatabaseManager;
@@ -106,6 +107,23 @@ class OrderController extends Controller
 
             return $order->load('items');
         });
+
+        // Dispatch the OrderCreated event only after successful order creation
+        // Convert order items to the format expected by the event
+        $eventItems = $order->items->map(function ($item) {
+            return [
+                'product_id' => $item->product_id,
+                'quantity' => $item->quantity,
+            ];
+        })->toArray();
+
+        PublishOrderCreated::dispatch(
+            event_id: \Ramsey\Uuid\Uuid::uuid4()->toString(),
+            order_id: $order->id,
+            user_id: $order->user_id,
+            items: $eventItems,
+            total_amount: (float) $order->total_amount,
+        );
 
         return response()->json([
             'success' => true,
