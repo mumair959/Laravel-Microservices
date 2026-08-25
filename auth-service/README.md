@@ -1,20 +1,25 @@
 # Auth Service
 
-The Auth Service is a dedicated microservice for user authentication and authorization. It manages user registration, login, token-based authentication, and session management.
+The Auth Service is the single source of truth for user authentication. It manages user registration, login, token-based authentication, and user information.
 
 ## Overview
 
-The Auth Service provides API endpoints for:
-- User registration
-- User login with token generation
-- Getting current authenticated user information
-- User logout with token revocation
-- Health check
+The Auth Service:
+- Owns the `users` table (the ONLY service with a users table)
+- Manages user registration and login
+- Issues and validates Bearer tokens
+- Provides authenticated user information to other services
+- Is called by the API Gateway to validate tokens
+- Does NOT have its own users table in Product or Order services
 
 ## Architecture
 
 ```
-Client → Auth Service (port 8003) → MySQL (auth_db)
+API Gateway
+   |
+   | Validate token
+   v
+Auth Service :8003 → auth_db (users, personal_access_tokens)
 ```
 
 ## Configuration

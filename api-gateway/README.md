@@ -1,23 +1,113 @@
 # API Gateway
 
-The API Gateway is a centralized entry point that forwards client requests to microservices within the Laravel microservices architecture. It provides a unified interface for clients and handles HTTP forwarding, error handling, and response management.
+The API Gateway is a centralized entry point that forwards client requests to microservices. It also acts as the authentication boundary, validating Bearer tokens and creating trusted internal headers for downstream services.
 
 ## Purpose
 
 The API Gateway:
-- Acts as a single entry point for all client requests
-- Forwards requests to appropriate microservices (Auth Service, Product Service, Order Service)
+- Acts as the single entry point for all client requests
+- Validates Bearer tokens with Auth Service
+- Forwards requests to appropriate microservices
+- Creates trusted internal headers (X-User-Id, X-User-Email)
+- Strips client-provided identity headers to prevent spoofing
 - Handles error scenarios gracefully (timeouts, connection failures)
-- Prevents clients from needing to know individual service URLs
 - Maintains separation of concerns between services
+
+## Authentication
+
+### Public Routes (No Authentication Required)
+```
+POST   /api/v1/auth/register
+POST   /api/v1/auth/login
+GET    /api/health
+```
+
+### Protected Routes (Bearer Token Required)
+```
+GET    /api/v1/auth/me
+POST   /api/v1/auth/logout
+GET    /api/v1/products
+POST   /api/v1/products
+GET    /api/v1/products/{id}
+PUT    /api/v1/products/{id}
+DELETE /api/v1/products/{id}
+GET    /api/v1/orders
+POST   /api/v1/orders
+GET    /api/v1/orders/{id}
+```
+
+### Authentication Flow
+
+1. Client sends request with `Authorization: Bearer <token>` header
+2. Gateway checks if route is protected
+3. If protected:
+   - Extract Bearer token from Authorization header
+   - Validate token by calling Auth Service `/api/v1/auth/me`
+   - If valid, extract user info (id, email, name)
+   - Store authenticated user data in request
+4. Gateway forwards request to downstream service with trusted headers:
+   - `X-User-Id: <user_id>`
+   - `X-User-Email: <user_email>`
+5. Downstream service receives authenticated user context
+
+### Security Features
+
+- **Token Validation**: All tokens validated with Auth Service
+- **Client Header Stripping**: Headers like `X-User-Id` from clients are removed before forwarding
+- **Trusted Header Creation**: Only Gateway creates authenticated user headers after validation
+- **Service Unavailability**: Returns 503 if Auth Service is unavailable
+- **Token Extraction**: Supports only `Bearer <token>` format
 
 ## Architecture
 
 ```
-Client → API Gateway (port 8000) → Microservices
-                                   ├─ Auth Service (port 8003)
-                                   ├─ Product Service (port 8001)
-                                   └─ Order Service (port 8002)
+Client
+   |
+   | Authorization: Bearer <token>
+   v
+API Gateway :8000
+   |
+   | Authenticate with Auth Service :8003
+   |
+   +---> Auth Service
+   |     (validate token, get user)
+   |
+   | X-User-Id header added
+   v
+Downstream Service
+├─ Auth Service :8003
+├─ Product Service :8001
+└─ Order Service :8002
+```
+
+## Middleware
+
+**AuthenticateWithAuthService** - Validates Bearer tokens with Auth Service
+- Location: `app/Http/Middleware/AuthenticateWithAuthService.php`
+- Registered as: `auth.service`
+- Applied to protected routes
+
+## Configuration
+
+**services.php**
+```php
+'auth_service_url' => env('AUTH_SERVICE_URL', 'http://127.0.0.1:8003'),
+'product_service_url' => env('PRODUCT_SERVICE_URL', 'http://127.0.0.1:8001'),
+'order_service_url' => env('ORDER_SERVICE_URL', 'http://127.0.0.1:8002'),
+```
+
+## Testing
+
+Run tests:
+```bash
+php artisan test
+```
+
+Test coverage:
+- Authentication tests
+- User context forwarding
+- Client header stripping
+- Protected route access control
 ```
 
 ## Service URLs

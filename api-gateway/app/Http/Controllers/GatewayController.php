@@ -23,7 +23,8 @@ class GatewayController extends Controller
         return $this->forwardToService(
             config('services.product_service_url'),
             $request,
-            $id
+            $id,
+            authenticated: true
         );
     }
 
@@ -32,11 +33,22 @@ class GatewayController extends Controller
         return $this->forwardToService(
             config('services.order_service_url'),
             $request,
-            $id
+            $id,
+            authenticated: true
         );
     }
 
-    private function forwardToService(string $serviceUrl, Request $request, ?string $id = null)
+    public function forwardAuthRequest(Request $request)
+    {
+        return $this->forwardToService(
+            config('services.auth_service_url'),
+            $request,
+            null,
+            authenticated: false
+        );
+    }
+
+    private function forwardToService(string $serviceUrl, Request $request, ?string $id = null, bool $authenticated = false)
     {
         // Build the full URL to forward to
         $path = $request->getPathInfo();
@@ -50,8 +62,11 @@ class GatewayController extends Controller
         }
 
         try {
+            // Get forwarding headers with authenticated user context
+            $headers = $this->getForwardingHeaders($request, $authenticated);
+            
             // Create HTTP client with timeout
-            $client = Http::withHeaders($this->getForwardingHeaders($request))
+            $client = Http::withHeaders($headers)
                 ->timeout(30);
 
             // Forward the request based on method
@@ -107,7 +122,7 @@ class GatewayController extends Controller
         }
     }
 
-    private function getForwardingHeaders(Request $request): array
+    private function getForwardingHeaders(Request $request, bool $authenticated = false): array
     {
         $headersToForward = [
             'content-type',
@@ -119,6 +134,17 @@ class GatewayController extends Controller
         foreach ($headersToForward as $header) {
             if ($request->hasHeader($header)) {
                 $headers[$header] = $request->header($header);
+            }
+        }
+
+        // Strip any client-provided identity headers
+        unset($headers['x-user-id'], $headers['x-user-email'], $headers['x-authenticated-user']);
+
+        // Add trusted user context headers only if authenticated
+        if ($authenticated && $request->has('authenticated_user_id')) {
+            $headers['x-user-id'] = $request->input('authenticated_user_id');
+            if ($request->has('authenticated_user_email')) {
+                $headers['x-user-email'] = $request->input('authenticated_user_email');
             }
         }
 

@@ -17,16 +17,39 @@ class OrderController extends Controller
     {
     }
 
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
+        // Get authenticated user ID from trusted Gateway header
+        $userId = $request->header('X-User-Id');
+
+        if (!$userId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated',
+            ], 401);
+        }
+
         return response()->json([
             'success' => true,
-            'data' => Order::with('items')->latest()->paginate(),
+            'data' => Order::with('items')
+                ->where('user_id', $userId)
+                ->latest()
+                ->paginate(),
         ]);
     }
 
     public function store(StoreOrderRequest $request, DatabaseManager $database): JsonResponse
     {
+        // Get authenticated user ID from trusted Gateway header
+        $userId = $request->header('X-User-Id');
+
+        if (!$userId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated',
+            ], 401);
+        }
+
         $items = [];
         $orderTotal = 0.0;
 
@@ -73,8 +96,9 @@ class OrderController extends Controller
             ];
         }
 
-        $order = $database->transaction(function () use ($items, $orderTotal): Order {
+        $order = $database->transaction(function () use ($items, $orderTotal, $userId): Order {
             $order = Order::create([
+                'user_id' => $userId,
                 'status' => 'pending',
                 'total_amount' => round($orderTotal, 2),
             ]);
@@ -89,9 +113,22 @@ class OrderController extends Controller
         ], 201);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(int $id, Request $request): JsonResponse
     {
-        $order = Order::with('items')->find($id);
+        // Get authenticated user ID from trusted Gateway header
+        $userId = $request->header('X-User-Id');
+
+        if (!$userId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated',
+            ], 401);
+        }
+
+        $order = Order::with('items')
+            ->where('id', $id)
+            ->where('user_id', $userId)
+            ->first();
 
         if ($order === null) {
             return response()->json([

@@ -1,6 +1,10 @@
 # Product Service
 
-Laravel 13 REST service for managing products.
+Laravel 13 REST service for managing products. Authentication is handled by the API Gateway.
+
+## Overview
+
+The Product Service manages the product catalog. It does NOT manage users - all authentication is handled through the API Gateway and Auth Service.
 
 ## Setup
 
@@ -15,6 +19,7 @@ php artisan key:generate
 Create a MySQL database named `product_db`, then set these values in `.env`:
 
 ```dotenv
+APP_URL=http://127.0.0.1:8001
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
@@ -36,6 +41,22 @@ php artisan serve --port=8001
 ```
 
 The service is available at `http://127.0.0.1:8001`.
+
+## Authentication
+
+All product endpoints (except health) require authentication through the API Gateway.
+
+Routes are accessed via Gateway at:
+- `GET    /api/v1/products` - List products
+- `POST   /api/v1/products` - Create product
+- `GET    /api/v1/products/{id}` - Get product
+- `PUT    /api/v1/products/{id}` - Update product
+- `DELETE /api/v1/products/{id}` - Delete product
+
+Public health endpoint:
+- `GET /api/health` - Service health check
+
+The Gateway validates the Bearer token with Auth Service before forwarding requests.
 
 ## API
 
