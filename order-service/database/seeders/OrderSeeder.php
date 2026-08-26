@@ -54,6 +54,7 @@ class OrderSeeder extends Seeder
 
         // Create specific test orders
         $testOrder1 = Order::create([
+            'user_id' => 1,
             'status' => 'pending',
             'total_amount' => 299.97,
         ]);
@@ -77,6 +78,7 @@ class OrderSeeder extends Seeder
         ]);
 
         $testOrder2 = Order::create([
+            'user_id' => 1,
             'status' => 'completed',
             'total_amount' => 149.99,
         ]);

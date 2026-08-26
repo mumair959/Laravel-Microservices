@@ -19,6 +19,7 @@ class OrderFactory extends Factory
         $statuses = ['pending', 'processing', 'completed', 'cancelled'];
 
         return [
+            'user_id' => $this->faker->numberBetween(1, 5),
             'status' => $this->faker->randomElement($statuses),
             'total_amount' => $this->faker->randomFloat(2, 50, 10000),
         ];
