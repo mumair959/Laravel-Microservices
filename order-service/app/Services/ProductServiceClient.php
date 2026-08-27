@@ -11,7 +11,7 @@ class ProductServiceClient
 {
     public function getProduct(int $productId): Response
     {
-        $correlationId = Request::attributes->get('correlation_id', '');
+        $correlationId = request()->attributes->get('correlation_id', '');
         
         return Http::timeout(config('services.http_timeout', 10))
             ->connectTimeout(config('services.http_connect_timeout', 5))
