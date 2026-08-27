@@ -52,8 +52,6 @@ class GatewayController extends Controller
     {
         // Build the full URL to forward to
         $path = $request->getPathInfo();
-        // Remove /api prefix
-        $path = preg_replace('~^/api~', '', $path);
         $url = rtrim($serviceUrl, '/') . $path;
 
         // Add query parameters
