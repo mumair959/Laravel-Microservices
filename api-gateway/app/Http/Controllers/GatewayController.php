@@ -63,9 +63,15 @@ class GatewayController extends Controller
             // Get forwarding headers with authenticated user context
             $headers = $this->getForwardingHeaders($request, $authenticated);
             
+            // Ensure correlation ID is present
+            if (!isset($headers['x-correlation-id'])) {
+                $headers['x-correlation-id'] = $request->header('X-Correlation-ID', \Ramsey\Uuid\Uuid::uuid4()->toString());
+            }
+            
             // Create HTTP client with timeout
             $client = Http::withHeaders($headers)
-                ->timeout(30);
+                ->timeout(config('services.http_timeout', 30))
+                ->connectTimeout(config('services.http_connect_timeout', 10));
 
             // Forward the request based on method
             $response = match ($request->getMethod()) {

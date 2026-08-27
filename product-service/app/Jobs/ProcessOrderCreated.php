@@ -27,6 +27,11 @@ class ProcessOrderCreated implements ShouldQueue
     public int $backoff = 30;
 
     /**
+     * The timeout in seconds.
+     */
+    public int $timeout = 30;
+
+    /**
      * Create a new job instance.
      */
     public function __construct(
@@ -35,6 +40,7 @@ class ProcessOrderCreated implements ShouldQueue
         public readonly int $user_id,
         public readonly array $items,
         public readonly float $total_amount,
+        public readonly string $correlation_id = '',
     ) {
         $this->onQueue(config('queue.product_queue', 'product-processing'));
     }
@@ -51,6 +57,7 @@ class ProcessOrderCreated implements ShouldQueue
             Log::info('OrderCreated event already processed, skipping', [
                 'event_id' => $this->event_id,
                 'order_id' => $this->order_id,
+                'correlation_id' => $this->correlation_id,
             ]);
             return;
         }
@@ -64,6 +71,7 @@ class ProcessOrderCreated implements ShouldQueue
                     Log::warning('Product not found for event processing', [
                         'event_id' => $this->event_id,
                         'product_id' => $item['product_id'],
+                        'correlation_id' => $this->correlation_id,
                     ]);
                     continue;
                 }
@@ -76,6 +84,7 @@ class ProcessOrderCreated implements ShouldQueue
                         'product_id' => $product->id,
                         'current_stock' => $product->stock,
                         'requested_quantity' => $item['quantity'],
+                        'correlation_id' => $this->correlation_id,
                     ]);
                     // Do not allow negative stock, but don't fail the job
                     // Log the event for manual review
@@ -89,6 +98,7 @@ class ProcessOrderCreated implements ShouldQueue
                     'product_id' => $product->id,
                     'quantity_deducted' => $item['quantity'],
                     'new_stock' => $newStock,
+                    'correlation_id' => $this->correlation_id,
                 ]);
             }
 
@@ -108,6 +118,7 @@ class ProcessOrderCreated implements ShouldQueue
             Log::info('OrderCreated event processed successfully', [
                 'event_id' => $this->event_id,
                 'order_id' => $this->order_id,
+                'correlation_id' => $this->correlation_id,
             ]);
         });
     }

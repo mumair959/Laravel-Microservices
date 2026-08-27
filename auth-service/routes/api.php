@@ -1,10 +1,15 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Services\HealthCheckService;
 use Illuminate\Support\Facades\Route;
 
 // Health check
-Route::get('/health', [AuthController::class, 'health']);
+Route::get('/health', function () {
+    $health = HealthCheckService::check('auth-service');
+    $statusCode = $health['success'] ? 200 : 503;
+    return response()->json($health, $statusCode);
+});
 
 Route::prefix('v1/auth')->group(function () {
     // Public routes

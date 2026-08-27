@@ -6,11 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreOrderRequest;
 use App\Jobs\PublishOrderCreated;
 use App\Models\Order;
+use App\Services\IdempotencyService;
 use App\Services\ProductServiceClient;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class OrderController extends Controller
 {
@@ -45,11 +47,24 @@ class OrderController extends Controller
         $userId = $request->header('X-User-Id');
 
         if (!$userId) {
+            Log::warning('Order creation attempted without authentication', [
+                'correlation_id' => $request->attributes->get('correlation_id'),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Unauthenticated',
             ], 401);
         }
+
+        $correlationId = $request->attributes->get('correlation_id', '');
+
+        Log::info('Order creation started', [
+            'service' => 'order-service',
+            'correlation_id' => $correlationId,
+            'user_id' => $userId,
+            'item_count' => count($request->validated('items')),
+        ]);
 
         $items = [];
         $orderTotal = 0.0;
@@ -58,14 +73,33 @@ class OrderController extends Controller
             try {
                 $productResponse = $this->productService->getProduct($requestedItem['product_id']);
             } catch (ConnectionException) {
+                Log::error('Failed to connect to Product Service', [
+                    'correlation_id' => $correlationId,
+                    'user_id' => $userId,
+                    'product_id' => $requestedItem['product_id'],
+                ]);
+
                 return $this->serviceUnavailableResponse();
             }
 
             if ($productResponse->serverError() || $productResponse->clientError() && !$productResponse->notFound()) {
+                Log::warning('Product Service returned error', [
+                    'correlation_id' => $correlationId,
+                    'user_id' => $userId,
+                    'product_id' => $requestedItem['product_id'],
+                    'status' => $productResponse->status(),
+                ]);
+
                 return $this->serviceUnavailableResponse();
             }
 
             if ($productResponse->notFound()) {
+                Log::warning('Product not found', [
+                    'correlation_id' => $correlationId,
+                    'user_id' => $userId,
+                    'product_id' => $requestedItem['product_id'],
+                ]);
+
                 return response()->json([
                     'success' => false,
                     'data' => null,
@@ -78,6 +112,14 @@ class OrderController extends Controller
             $stock = (int) ($product['stock'] ?? 0);
 
             if ($quantity > $stock) {
+                Log::warning('Insufficient stock', [
+                    'correlation_id' => $correlationId,
+                    'user_id' => $userId,
+                    'product_id' => $product['id'],
+                    'requested_quantity' => $quantity,
+                    'available_stock' => $stock,
+                ]);
+
                 return response()->json([
                     'success' => false,
                     'data' => null,
@@ -108,6 +150,15 @@ class OrderController extends Controller
             return $order->load('items');
         });
 
+        Log::info('Order created successfully', [
+            'service' => 'order-service',
+            'correlation_id' => $correlationId,
+            'user_id' => $userId,
+            'order_id' => $order->id,
+            'total_amount' => $order->total_amount,
+            'item_count' => count($order->items),
+        ]);
+
         // Dispatch the OrderCreated event only after successful order creation
         // Convert order items to the format expected by the event
         $eventItems = $order->items->map(function ($item) {
@@ -123,12 +174,25 @@ class OrderController extends Controller
             user_id: $order->user_id,
             items: $eventItems,
             total_amount: (float) $order->total_amount,
+            correlation_id: $correlationId,
         );
 
-        return response()->json([
+        Log::info('OrderCreated event dispatched', [
+            'service' => 'order-service',
+            'correlation_id' => $correlationId,
+            'user_id' => $userId,
+            'order_id' => $order->id,
+        ]);
+
+        $response = [
             'success' => true,
             'data' => $order,
-        ], 201);
+        ];
+
+        // Store idempotency response if key was provided
+        IdempotencyService::storeResponse($request, 201, $response);
+
+        return response()->json($response, 201);
     }
 
     public function show(int $id, Request $request): JsonResponse

@@ -1,9 +1,14 @@
 <?php
 
 use App\Http\Controllers\GatewayController;
+use App\Services\HealthCheckService;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/health', [GatewayController::class, 'health']);
+Route::get('/health', function () {
+    $health = HealthCheckService::check('api-gateway');
+    $statusCode = $health['success'] ? 200 : 503;
+    return response()->json($health, $statusCode);
+});
 
 // Auth Service forwarding - public routes
 Route::prefix('v1/auth')->group(function () {

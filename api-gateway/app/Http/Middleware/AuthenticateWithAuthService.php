@@ -43,9 +43,13 @@ class AuthenticateWithAuthService
 
         try {
             // Call Auth Service to validate token
-            $response = Http::withHeaders([
-                'Authorization' => "Bearer {$plainToken}",
-            ])->get(config('services.auth_service_url') . '/api/v1/auth/me');
+            $response = Http::timeout(config('services.http_timeout', 10))
+                ->connectTimeout(config('services.http_connect_timeout', 5))
+                ->withHeaders([
+                    'Authorization' => "Bearer {$plainToken}",
+                    'X-Correlation-ID' => $request->header('X-Correlation-ID', \Ramsey\Uuid\Uuid::uuid4()->toString()),
+                ])
+                ->get(config('services.auth_service_url') . '/api/v1/auth/me');
 
             if (!$response->successful()) {
                 return response()->json([

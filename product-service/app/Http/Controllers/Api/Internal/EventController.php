@@ -57,17 +57,21 @@ class EventController extends Controller
 
         try {
             // Dispatch the job to process the event asynchronously
+            $correlationId = $request->header('X-Correlation-ID', '');
+            
             ProcessOrderCreated::dispatch(
                 event_id: $validated['event_id'],
                 order_id: $validated['order_id'],
                 user_id: $validated['user_id'],
                 items: $validated['items'],
                 total_amount: (float) $validated['total_amount'],
+                correlation_id: $correlationId,
             );
 
             Log::info('OrderCreated event accepted and queued', [
                 'event_id' => $validated['event_id'],
                 'order_id' => $validated['order_id'],
+                'correlation_id' => $correlationId,
             ]);
 
             return response()->json([

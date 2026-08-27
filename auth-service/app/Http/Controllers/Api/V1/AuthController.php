@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 class AuthController extends Controller
 {
@@ -35,6 +36,13 @@ class AuthController extends Controller
                 'password' => Hash::make($request->validated('password')),
             ]);
 
+            Log::info('User registered', [
+                'service' => 'auth-service',
+                'correlation_id' => $request->attributes->get('correlation_id'),
+                'user_id' => $user->id,
+                'email' => $user->email,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -46,6 +54,12 @@ class AuthController extends Controller
                 ],
             ], 201);
         } catch (\Exception $e) {
+            Log::error('User registration failed', [
+                'service' => 'auth-service',
+                'correlation_id' => $request->attributes->get('correlation_id'),
+                'error' => $e->getMessage(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Registration failed',
@@ -62,6 +76,12 @@ class AuthController extends Controller
             $user = User::where('email', $request->validated('email'))->first();
 
             if (!$user || !Hash::check($request->validated('password'), $user->password)) {
+                Log::warning('Invalid login attempt', [
+                    'service' => 'auth-service',
+                    'correlation_id' => $request->attributes->get('correlation_id'),
+                    'email' => $request->validated('email'),
+                ]);
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Invalid credentials',
@@ -70,6 +90,13 @@ class AuthController extends Controller
 
             // Create a new personal access token
             $tokenData = $user->createToken('auth-token');
+
+            Log::info('User logged in', [
+                'service' => 'auth-service',
+                'correlation_id' => $request->attributes->get('correlation_id'),
+                'user_id' => $user->id,
+                'email' => $user->email,
+            ]);
 
             return response()->json([
                 'success' => true,
@@ -83,6 +110,12 @@ class AuthController extends Controller
                 ],
             ], 200);
         } catch (\Exception $e) {
+            Log::error('User login failed', [
+                'service' => 'auth-service',
+                'correlation_id' => $request->attributes->get('correlation_id'),
+                'error' => $e->getMessage(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Login failed',

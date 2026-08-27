@@ -25,6 +25,11 @@ class PublishOrderCreated implements ShouldQueue
     public int $backoff = 60;
 
     /**
+     * The timeout in seconds.
+     */
+    public int $timeout = 30;
+
+    /**
      * Create a new job instance.
      */
     public function __construct(
@@ -33,6 +38,7 @@ class PublishOrderCreated implements ShouldQueue
         public readonly int $user_id,
         public readonly array $items,
         public readonly float $total_amount,
+        public readonly string $correlation_id = '',
     ) {
         $this->onQueue(config('queue.order_queue', 'order-processing'));
     }
@@ -53,13 +59,15 @@ class PublishOrderCreated implements ShouldQueue
 
         $secret = config('services.product_service.event_secret');
         $productServiceUrl = rtrim(config('services.product_service.url'), '/');
+        $correlationId = $this->correlation_id ?: \Ramsey\Uuid\Uuid::uuid4()->toString();
 
         try {
-            $response = Http::timeout(10)
-                ->connectTimeout(5)
+            $response = Http::timeout(config('services.http_timeout', 10))
+                ->connectTimeout(config('services.http_connect_timeout', 5))
                 ->withHeaders([
                     'Content-Type' => 'application/json',
                     'X-Service-Secret' => $secret,
+                    'X-Correlation-ID' => $correlationId,
                 ])
                 ->post("{$productServiceUrl}/api/internal/events/order-created", $payload);
 
@@ -67,11 +75,13 @@ class PublishOrderCreated implements ShouldQueue
                 Log::info('OrderCreated event published successfully', [
                     'event_id' => $this->event_id,
                     'order_id' => $this->order_id,
+                    'correlation_id' => $correlationId,
                 ]);
             } else {
                 Log::warning('Failed to publish OrderCreated event', [
                     'event_id' => $this->event_id,
                     'order_id' => $this->order_id,
+                    'correlation_id' => $correlationId,
                     'status' => $response->status(),
                     'response' => $response->body(),
                 ]);
@@ -82,6 +92,7 @@ class PublishOrderCreated implements ShouldQueue
             Log::error('Error publishing OrderCreated event', [
                 'event_id' => $this->event_id,
                 'order_id' => $this->order_id,
+                'correlation_id' => $correlationId,
                 'error' => $e->getMessage(),
             ]);
 
