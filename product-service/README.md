@@ -363,3 +363,266 @@ Tests use the SQLite in-memory database configured in `phpunit.xml`:
 ```bash
 php artisan test
 ```
+
+## Observability & Monitoring
+
+### Event Reception Logging
+
+When Product Service receives an OrderCreated event:
+
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "event_id": "event-456",
+  "order_id": 100,
+  "user_id": 15,
+  "item_count": 2,
+  "message": "OrderCreated event received"
+}
+```
+
+Event is then queued:
+
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "event_id": "event-456",
+  "order_id": 100,
+  "message": "OrderCreated event queued for processing"
+}
+```
+
+### Queue Job Logging
+
+The `ProcessOrderCreated` job logs its execution:
+
+**Job started:**
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "job": "ProcessOrderCreated",
+  "event_id": "event-456",
+  "order_id": 100,
+  "message": "Processing OrderCreated event started"
+}
+```
+
+**Processing each item:**
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "job": "ProcessOrderCreated",
+  "event_id": "event-456",
+  "order_id": 100,
+  "product_id": 1,
+  "quantity": 2,
+  "message": "Processing order item"
+}
+```
+
+**Stock updated:**
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "job": "ProcessOrderCreated",
+  "event_id": "event-456",
+  "product_id": 1,
+  "quantity_deducted": 2,
+  "new_stock": 8,
+  "message": "Product stock deducted successfully"
+}
+```
+
+**Duplicate event detected:**
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "job": "ProcessOrderCreated",
+  "event_id": "event-456",
+  "message": "Duplicate event detected and skipped"
+}
+```
+
+**Job completed:**
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "job": "ProcessOrderCreated",
+  "event_id": "event-456",
+  "order_id": 100,
+  "message": "OrderCreated event processing completed successfully"
+}
+```
+
+### Request Logging
+
+All HTTP requests are logged with:
+- HTTP method (GET, POST, PUT, DELETE)
+- Path (/api/v1/products)
+- Response status
+- Duration in milliseconds
+- Correlation ID
+
+Health check requests are excluded to avoid log spam.
+
+### Health Check
+
+```bash
+curl http://127.0.0.1:8001/api/health
+```
+
+Response:
+```json
+{
+  "success": true,
+  "service": "product-service",
+  "status": "healthy"
+}
+```
+
+### Failed Job Handling
+
+If a job fails after retries:
+
+```json
+{
+  "service": "product-service",
+  "job": "ProcessOrderCreated",
+  "event_id": "event-456",
+  "order_id": 100,
+  "correlation_id": "abc-123",
+  "exception": "RuntimeException",
+  "message": "Product not found in inventory",
+  "attempts": 3,
+  "message_level": "critical"
+}
+```
+
+View failed jobs:
+```bash
+php artisan queue:failed
+```
+
+Retry a failed job:
+```bash
+php artisan queue:retry 1
+```
+
+### Correlation ID Flow
+
+Every request that triggers processing includes the correlation ID:
+
+```
+Order Service sends event with:
+  X-Correlation-ID: abc-123
+
+Product Service receives event:
+  X-Correlation-ID: abc-123
+
+ProcessOrderCreated job processes with:
+  correlation_id: abc-123
+
+All logs include:
+  correlation_id: abc-123
+```
+
+### Viewing Logs
+
+View logs in real-time:
+```bash
+tail -f storage/logs/laravel.log
+```
+
+Search for a specific correlation ID:
+```bash
+grep "abc-123" storage/logs/laravel.log
+```
+
+Filter for errors only:
+```bash
+grep "error\|Error\|ERROR" storage/logs/laravel.log
+```
+
+Filter for a specific event:
+```bash
+grep "event-456" storage/logs/laravel.log
+```
+
+### Tracing Event Processing
+
+To trace an event through Product Service:
+
+1. **Get the correlation ID from Order Service logs** or response header
+2. **Search Product Service logs with that correlation ID:**
+   ```bash
+   grep "abc-123" storage/logs/laravel.log
+   ```
+3. **Expected log sequence:**
+   - OrderCreated event received
+   - OrderCreated event queued for processing
+   - Processing OrderCreated event started (from worker)
+   - Processing order item (for each item)
+   - Product stock deducted successfully (for each item)
+   - OrderCreated event processing completed successfully
+
+### Insufficient Stock Scenario
+
+When a product has insufficient stock:
+
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "product_id": 5,
+  "current_stock": 2,
+  "requested_quantity": 5,
+  "message": "Insufficient stock - cannot fulfill order item"
+}
+```
+
+The job **completes successfully** (no retry), but the stock is not updated.
+
+### Duplicate Event Scenario
+
+When the same event is processed twice:
+
+**First time:**
+- Event processing completes successfully
+- Stock is updated
+- Record added to processed_events table
+
+**Second time:**
+- Duplicate detected immediately
+- Stock NOT updated
+- Job completes without error
+- Log: "Duplicate event detected and skipped"
+
+### Monitoring Stock Updates
+
+Query processed events:
+```bash
+mysql product_db
+SELECT event_id, order_id, processed_at FROM processed_events ORDER BY processed_at DESC LIMIT 10;
+```
+
+Check specific order:
+```bash
+mysql product_db
+SELECT * FROM processed_events WHERE order_id = 100;
+```
+
+### Configuration
+
+Service name is configured in `.env`:
+```env
+SERVICE_NAME=product-service
+```
+
+All logging is built-in and automatic.

@@ -347,3 +347,197 @@ Test coverage includes:
 - User cannot see another user's orders
 - User can view only their own order
 - Missing X-User-Id header returns 401
+
+## Observability & Monitoring
+
+### Correlation IDs
+
+Every request includes a unique correlation ID that flows through the entire system:
+
+```bash
+# Request with custom correlation ID
+curl -X POST http://127.0.0.1:8000/api/v1/orders \
+  -H "Authorization: Bearer <token>" \
+  -H "X-Correlation-ID: my-trace-123" \
+  -H "Content-Type: application/json" \
+  -d '{"items": [{"product_id": 1, "quantity": 2}]}'
+```
+
+The correlation ID is:
+- Generated if not provided
+- Included in all logs
+- Forwarded to Product Service
+- Preserved in queue jobs
+- Returned in response headers
+
+### Structured Logging
+
+All important operations log with structured context:
+
+**Order creation:**
+```
+service: order-service
+correlation_id: abc-123
+user_id: 15
+order_id: 100
+message: Order created successfully
+```
+
+**Event dispatch:**
+```
+service: order-service
+correlation_id: abc-123
+order_id: 100
+message: OrderCreated event dispatched
+```
+
+**Service-to-service call:**
+```
+service: order-service
+correlation_id: abc-123
+target_service: product-service
+status: 200
+duration_ms: 45
+message: Service-to-service request succeeded
+```
+
+### Request Logging
+
+Every HTTP request is logged with:
+- HTTP method (POST, GET, etc.)
+- Path (/api/v1/orders)
+- Response status
+- Duration in milliseconds
+- Correlation ID
+
+Health check requests are excluded to avoid log spam.
+
+### Queue Job Monitoring
+
+The `PublishOrderCreated` job logs:
+1. Job started
+2. Event delivery initiated
+3. Event delivery succeeded/failed
+4. Retry attempts
+5. Job completion or failure
+
+Example:
+```
+Publishing OrderCreated event started
+Sending event to Product Service
+OrderCreated event delivered successfully
+```
+
+### Health Check
+
+```bash
+curl http://127.0.0.1:8002/api/health
+```
+
+Healthy response:
+```json
+{
+  "success": true,
+  "service": "order-service",
+  "status": "healthy"
+}
+```
+
+Unhealthy response (when database is unavailable):
+```json
+{
+  "success": false,
+  "service": "order-service",
+  "status": "unhealthy"
+}
+```
+
+### Viewing Logs
+
+View recent logs:
+```bash
+tail -f storage/logs/laravel.log
+```
+
+Search logs by correlation ID:
+```bash
+grep "abc-123" storage/logs/laravel.log
+```
+
+Search for errors:
+```bash
+grep "error\|Error\|ERROR" storage/logs/laravel.log
+```
+
+### Failed Job Monitoring
+
+View failed queue jobs:
+```bash
+php artisan queue:failed
+```
+
+Example output:
+```
+  ID    Queue       Connection  Failed At
+  1     order-processing  database    2024-01-15 10:30:45
+  2     order-processing  database    2024-01-15 10:45:12
+```
+
+Inspect a failed job:
+```bash
+php artisan queue:failed --id=1
+```
+
+Retry a failed job:
+```bash
+php artisan queue:retry 1
+```
+
+Retry all failed jobs:
+```bash
+php artisan queue:retry all
+```
+
+Delete a failed job:
+```bash
+php artisan queue:forget 1
+```
+
+### Service-to-Service Error Handling
+
+When Product Service is unavailable:
+
+1. **Request fails with connection error**
+2. **Error is logged with correlation ID**
+3. **Queue job retries (up to 3 times)**
+4. **If retries exhaust, job moves to failed_jobs**
+5. **Manual retry is possible once service recovers**
+
+Log example:
+```
+Service-to-service request connection failed
+target_service: product-service
+correlation_id: abc-123
+error: Connection timeout
+duration_ms: 5001
+```
+
+### Configuration
+
+Service name is configured in `.env`:
+```env
+SERVICE_NAME=order-service
+```
+
+Request and queue logging are built-in and cannot be disabled (health checks are always excluded).
+
+### Tracing a Complete Order
+
+1. **Create order and capture correlation ID from response header**
+2. **Search order-service logs with that ID**
+3. **Look for "Order created successfully" and "OrderCreated event dispatched"**
+4. **Watch the queue worker process the PublishOrderCreated job**
+5. **Check product-service logs with the same correlation ID**
+6. **Verify "OrderCreated event processing completed successfully"**
+
+All logs with the same correlation ID tell the complete story of that order.

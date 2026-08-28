@@ -615,3 +615,458 @@ tail -f product-service/storage/logs/laravel.log
 - Failed authentication attempts are logged
 - Invalid tokens are rejected immediately
 - All inter-service communication includes service secret validation
+
+## Observability & Monitoring
+
+### Overview
+
+This microservices system implements comprehensive observability using:
+
+- **Correlation IDs** - Trace requests across all services
+- **Structured Logging** - JSON logs with consistent context
+- **Request Logging** - Log all HTTP requests with duration
+- **Service-to-Service Logging** - Track inter-service calls
+- **Queue Job Logging** - Monitor asynchronous processing
+- **Health Checks** - Verify service availability
+- **Failure Tracking** - Review failed jobs
+
+All observability features are built on Laravel's native logging and request lifecycle features.
+
+### Correlation ID Flow
+
+The `X-Correlation-ID` header flows through the entire system:
+
+```
+┌──────────┐
+│  Client  │
+└────┬─────┘
+     │ X-Correlation-ID: abc-123
+     ↓
+┌──────────────────┐
+│   API Gateway    │ (validates or generates)
+└────┬─────────────┘
+     │ X-Correlation-ID: abc-123
+     ├──────────────────────────────────┐
+     │                                  │
+     ↓                                  ↓
+┌──────────────┐              ┌──────────────┐
+│ Auth Service │              │ Order Service│
+└──────────────┘              └────┬─────────┘
+                                   │
+                            ┌──────▼────────┐
+                            │ PublishOrder  │
+                            │ Created Job   │
+                            └──────┬────────┘
+                                   │
+                            ┌──────▼──────────────┐
+                            │ Product Service    │
+                            │ /api/internal/     │
+                            │ events/order-...   │
+                            └──────┬─────────────┘
+                                   │
+                            ┌──────▼────────┐
+                            │ProcessOrder   │
+                            │ Created Job   │
+                            └───────────────┘
+```
+
+**Every step logs with the same correlation ID**, allowing you to trace the entire request flow.
+
+### Request Logging
+
+Every HTTP request is logged with:
+
+- Service name
+- Correlation ID
+- HTTP method
+- Path
+- Response status
+- Duration (milliseconds)
+
+**Example log entries:**
+
+```json
+{
+  "service": "order-service",
+  "correlation_id": "abc-123",
+  "method": "POST",
+  "path": "/api/v1/orders",
+  "status": 201,
+  "duration_ms": 145,
+  "message": "HTTP request completed"
+}
+```
+
+Health check requests (`/api/health`) are NOT logged to avoid log spam.
+
+### Structured Logging
+
+Logs include structured context for easy searching:
+
+```
+Log context automatically includes:
+  - service: Name of the service
+  - correlation_id: Request tracing ID
+  - job: Queue job name (if applicable)
+  - event_id: Event identifier
+  - order_id: Order identifier
+  - product_id: Product identifier
+  - user_id: Authenticated user ID
+  - duration_ms: Request/operation duration
+```
+
+### Service-to-Service Logging
+
+When Order Service calls Product Service:
+
+```json
+{
+  "service": "order-service",
+  "correlation_id": "abc-123",
+  "target_service": "product-service",
+  "method": "GET",
+  "path": "/api/v1/products/1",
+  "status": 200,
+  "duration_ms": 45,
+  "message": "Service-to-service request succeeded"
+}
+```
+
+If the call fails:
+
+```json
+{
+  "service": "order-service",
+  "correlation_id": "abc-123",
+  "target_service": "product-service",
+  "status": 503,
+  "duration_ms": 5001,
+  "error": "Connection timeout",
+  "message": "Service-to-service request connection failed"
+}
+```
+
+### Queue Job Logging
+
+Each queue job logs its execution with correlation ID:
+
+**PublishOrderCreated job:**
+```json
+{
+  "service": "order-service",
+  "correlation_id": "abc-123",
+  "job": "PublishOrderCreated",
+  "event_id": "event-456",
+  "order_id": 100,
+  "message": "Publishing OrderCreated event started"
+}
+```
+
+**ProcessOrderCreated job:**
+```json
+{
+  "service": "product-service",
+  "correlation_id": "abc-123",
+  "job": "ProcessOrderCreated",
+  "event_id": "event-456",
+  "order_id": 100,
+  "product_id": 1,
+  "message": "Product stock deducted successfully"
+}
+```
+
+### Health Endpoints
+
+All services expose health check endpoints:
+
+**Request:**
+```bash
+curl http://127.0.0.1:8002/api/health
+```
+
+**Healthy response (200):**
+```json
+{
+  "success": true,
+  "service": "order-service",
+  "status": "healthy"
+}
+```
+
+**Unhealthy response (503):**
+```json
+{
+  "success": false,
+  "service": "order-service",
+  "status": "unhealthy"
+}
+```
+
+A service is unhealthy when its database is unavailable.
+
+### Accessing Logs
+
+Logs are stored in `storage/logs/laravel.log` for each service:
+
+```bash
+# Watch Order Service logs in real-time
+tail -f order-service/storage/logs/laravel.log
+
+# Watch Product Service logs
+tail -f product-service/storage/logs/laravel.log
+
+# Search for a specific correlation ID
+grep "abc-123" order-service/storage/logs/laravel.log
+grep "abc-123" product-service/storage/logs/laravel.log
+```
+
+### Troubleshooting Guide
+
+#### Scenario 1: Order was created but stock was not updated
+
+**Steps:**
+
+1. **Verify Order Service is running:**
+   ```bash
+   curl http://127.0.0.1:8002/api/health
+   ```
+
+2. **Verify Product Service is running:**
+   ```bash
+   curl http://127.0.0.1:8001/api/health
+   ```
+
+3. **Check if the queue worker is running:**
+   ```bash
+   # In order-service terminal
+   php artisan queue:work database --queue=order-processing
+   ```
+
+4. **Check for failed jobs:**
+   ```bash
+   cd order-service
+   php artisan queue:failed
+   ```
+
+5. **Get the order's correlation ID from order creation response** or from logs:
+   ```bash
+   grep "Order created successfully" order-service/storage/logs/laravel.log
+   ```
+
+6. **Search all logs with that correlation ID:**
+   ```bash
+   CORRELATION_ID="abc-123"
+   grep "$CORRELATION_ID" order-service/storage/logs/laravel.log
+   grep "$CORRELATION_ID" product-service/storage/logs/laravel.log
+   ```
+
+7. **Look for errors:**
+   ```bash
+   grep "$CORRELATION_ID" order-service/storage/logs/laravel.log | grep -i error
+   grep "$CORRELATION_ID" product-service/storage/logs/laravel.log | grep -i error
+   ```
+
+8. **If a job is stuck in failed queue, retry it:**
+   ```bash
+   # List failed jobs with their IDs
+   cd order-service
+   php artisan queue:failed
+   
+   # Retry a specific job
+   php artisan queue:retry 1
+   
+   # Retry all failed jobs
+   php artisan queue:retry all
+   ```
+
+#### Scenario 2: Product Service is timing out
+
+**Steps:**
+
+1. **Check if Product Service is running:**
+   ```bash
+   curl http://127.0.0.1:8001/api/health
+   ```
+
+2. **Check Order Service logs for timeout errors:**
+   ```bash
+   tail -f order-service/storage/logs/laravel.log | grep "timeout"
+   ```
+
+3. **Monitor Order Service queue:**
+   ```bash
+   cd order-service
+   php artisan queue:failed
+   ```
+
+4. **Check Product Service database:**
+   ```bash
+   mysql product_db
+   SELECT COUNT(*) FROM products;
+   ```
+
+5. **Restart Product Service and retry failed jobs once it's up:**
+   ```bash
+   cd order-service
+   php artisan queue:retry all
+   ```
+
+#### Scenario 3: Duplicate order was created (idempotency failure)
+
+**Steps:**
+
+1. **Check idempotency key in Order Service database:**
+   ```bash
+   mysql order_db
+   SELECT * FROM idempotency_keys WHERE key = 'YOUR-KEY';
+   ```
+
+2. **Verify the response was cached:**
+   ```bash
+   SELECT response_body FROM idempotency_keys WHERE key = 'YOUR-KEY';
+   ```
+
+3. **If no entry exists, the key was not set or the transaction failed**
+
+4. **Always include `Idempotency-Key` header in order creation requests:**
+   ```bash
+   curl -X POST http://127.0.0.1:8000/api/v1/orders \
+     -H "Authorization: Bearer <token>" \
+     -H "Idempotency-Key: unique-request-id-123" \
+     -H "Content-Type: application/json" \
+     -d '{"items": [{"product_id": 1, "quantity": 2}]}'
+   ```
+
+#### Scenario 4: Authentication is failing
+
+**Steps:**
+
+1. **Verify Auth Service is running:**
+   ```bash
+   curl http://127.0.0.1:8003/api/health
+   ```
+
+2. **Test login directly:**
+   ```bash
+   curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email": "user@example.com", "password": "password"}'
+   ```
+
+3. **Check Auth Service logs for errors:**
+   ```bash
+   grep -i "login" auth-service/storage/logs/laravel.log
+   grep -i "error" auth-service/storage/logs/laravel.log
+   ```
+
+4. **Verify user exists in Auth Service database:**
+   ```bash
+   mysql auth_db
+   SELECT * FROM users WHERE email = 'user@example.com';
+   ```
+
+### Example: Tracing a Complete Request
+
+Here's how to trace a complete order creation flow using correlation IDs:
+
+**1. Create order with custom correlation ID:**
+```bash
+CORRELATION_ID="trace-$(date +%s)"
+
+curl -X POST http://127.0.0.1:8000/api/v1/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Correlation-ID: $CORRELATION_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"items": [{"product_id": 1, "quantity": 2}]}'
+
+echo "Correlation ID: $CORRELATION_ID"
+```
+
+**2. Watch all logs with this correlation ID:**
+```bash
+CORRELATION_ID="trace-1234567890"
+
+# Terminal 1: Watch order-service logs
+tail -f order-service/storage/logs/laravel.log | grep "$CORRELATION_ID"
+
+# Terminal 2: Watch product-service logs
+tail -f product-service/storage/logs/laravel.log | grep "$CORRELATION_ID"
+```
+
+**3. Search logs after execution:**
+```bash
+# Find all entries for this correlation ID
+grep "$CORRELATION_ID" order-service/storage/logs/laravel.log
+grep "$CORRELATION_ID" product-service/storage/logs/laravel.log
+
+# Filter just errors
+grep "$CORRELATION_ID" order-service/storage/logs/laravel.log | grep -i error
+grep "$CORRELATION_ID" product-service/storage/logs/laravel.log | grep -i error
+
+# Filter just warnings
+grep "$CORRELATION_ID" order-service/storage/logs/laravel.log | grep -i warning
+```
+
+**4. Expected log flow:**
+```
+API Gateway:
+  HTTP request received (POST /api/v1/orders)
+  
+Order Service:
+  HTTP request received
+  Order creation started
+  Order created successfully
+  OrderCreated event dispatched
+  HTTP request completed (201)
+  
+PublishOrderCreated Worker:
+  Publishing OrderCreated event started
+  Sending event to Product Service
+  OrderCreated event delivered successfully
+  Job completed
+  
+Product Service:
+  OrderCreated event received
+  Event queued for processing
+  HTTP request completed (202)
+  
+ProcessOrderCreated Worker:
+  Processing OrderCreated event started
+  Processing order item
+  Product stock deducted successfully
+  OrderCreated event processing completed successfully
+  Job completed
+```
+
+### Performance Tuning
+
+**Logging Performance:**
+- Request logs exclude health checks (no spam)
+- Structured logs are JSON-compatible for parsing
+- No expensive operations in logging path
+- Log level can be adjusted via `LOG_LEVEL` env var
+
+**Queue Worker Performance:**
+- Adjust `--timeout` if jobs frequently timeout
+- Monitor database connection pool limits
+- Scale workers horizontally as needed
+- Use `--stop-when-empty` for temporary workers
+
+### Sensitive Data Protection
+
+**Never logged:**
+- Passwords
+- Authentication tokens / Authorization headers
+- API keys
+- Database credentials
+- Service secrets (X-Service-Secret)
+- Personal information beyond user_id
+- Full request/response bodies
+
+**Safe to log:**
+- Correlation IDs (UUIDs with no meaning)
+- HTTP method, path, status
+- User ID (not email or name)
+- Duration, timestamps
+- Service names
+- Error type (Exception class, not stack trace)

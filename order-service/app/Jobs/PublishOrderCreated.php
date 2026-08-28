@@ -48,6 +48,19 @@ class PublishOrderCreated implements ShouldQueue
      */
     public function handle(): void
     {
+        $correlationId = $this->correlation_id ?: \Ramsey\Uuid\Uuid::uuid4()->toString();
+        
+        // Set log context for this job
+        Log::withContext([
+            'service' => 'order-service',
+            'correlation_id' => $correlationId,
+            'job' => 'PublishOrderCreated',
+            'event_id' => $this->event_id,
+            'order_id' => $this->order_id,
+        ]);
+
+        Log::info('Publishing OrderCreated event started');
+
         $payload = [
             'event_id' => $this->event_id,
             'event' => 'OrderCreated',
@@ -59,9 +72,11 @@ class PublishOrderCreated implements ShouldQueue
 
         $secret = config('services.product_service.event_secret');
         $productServiceUrl = rtrim(config('services.product_service.url'), '/');
-        $correlationId = $this->correlation_id ?: \Ramsey\Uuid\Uuid::uuid4()->toString();
 
         try {
+            Log::info('Sending event to Product Service');
+            $startTime = microtime(true);
+
             $response = Http::timeout(config('services.http_timeout', 10))
                 ->connectTimeout(config('services.http_connect_timeout', 5))
                 ->withHeaders([
@@ -71,29 +86,28 @@ class PublishOrderCreated implements ShouldQueue
                 ])
                 ->post("{$productServiceUrl}/api/internal/events/order-created", $payload);
 
+            $duration = (microtime(true) - $startTime) * 1000;
+
             if ($response->successful()) {
-                Log::info('OrderCreated event published successfully', [
-                    'event_id' => $this->event_id,
-                    'order_id' => $this->order_id,
-                    'correlation_id' => $correlationId,
+                Log::info('OrderCreated event delivered successfully', [
+                    'status' => $response->status(),
+                    'duration_ms' => round($duration, 2),
+                    'target_service' => 'product-service',
                 ]);
             } else {
-                Log::warning('Failed to publish OrderCreated event', [
-                    'event_id' => $this->event_id,
-                    'order_id' => $this->order_id,
-                    'correlation_id' => $correlationId,
+                Log::warning('Failed to deliver OrderCreated event', [
                     'status' => $response->status(),
-                    'response' => $response->body(),
+                    'duration_ms' => round($duration, 2),
+                    'target_service' => 'product-service',
                 ]);
 
                 throw new \Exception('Failed to publish event: HTTP ' . $response->status());
             }
         } catch (\Exception $e) {
-            Log::error('Error publishing OrderCreated event', [
-                'event_id' => $this->event_id,
-                'order_id' => $this->order_id,
-                'correlation_id' => $correlationId,
+            Log::error('Exception while publishing OrderCreated event', [
                 'error' => $e->getMessage(),
+                'exception_class' => get_class($e),
+                'attempt' => $this->attempts(),
             ]);
 
             throw $e;
@@ -105,10 +119,17 @@ class PublishOrderCreated implements ShouldQueue
      */
     public function failed(\Throwable $exception): void
     {
+        $correlationId = $this->correlation_id ?: 'unknown';
+        
         Log::critical('PublishOrderCreated job failed permanently', [
+            'service' => 'order-service',
+            'job' => 'PublishOrderCreated',
             'event_id' => $this->event_id,
             'order_id' => $this->order_id,
-            'error' => $exception->getMessage(),
+            'correlation_id' => $correlationId,
+            'exception' => get_class($exception),
+            'message' => $exception->getMessage(),
+            'attempts' => $this->attempts(),
         ]);
     }
 }

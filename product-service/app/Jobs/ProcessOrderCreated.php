@@ -50,28 +50,40 @@ class ProcessOrderCreated implements ShouldQueue
      */
     public function handle(): void
     {
+        $correlationId = $this->correlation_id ?: \Ramsey\Uuid\Uuid::uuid4()->toString();
+        
+        // Set log context for this job
+        Log::withContext([
+            'service' => 'product-service',
+            'correlation_id' => $correlationId,
+            'job' => 'ProcessOrderCreated',
+            'event_id' => $this->event_id,
+            'order_id' => $this->order_id,
+        ]);
+
+        Log::info('Processing OrderCreated event started');
+
         // Check if this event has already been processed
         $processed = ProcessedEvent::where('event_id', $this->event_id)->exists();
 
         if ($processed) {
-            Log::info('OrderCreated event already processed, skipping', [
-                'event_id' => $this->event_id,
-                'order_id' => $this->order_id,
-                'correlation_id' => $this->correlation_id,
-            ]);
+            Log::info('Duplicate event detected and skipped');
             return;
         }
 
         // Use transaction to ensure atomicity
         DB::transaction(function (): void {
             foreach ($this->items as $item) {
+                Log::info('Processing order item', [
+                    'product_id' => $item['product_id'],
+                    'quantity' => $item['quantity'],
+                ]);
+
                 $product = Product::lockForUpdate()->find($item['product_id']);
 
                 if (!$product) {
-                    Log::warning('Product not found for event processing', [
-                        'event_id' => $this->event_id,
+                    Log::warning('Product not found in inventory', [
                         'product_id' => $item['product_id'],
-                        'correlation_id' => $this->correlation_id,
                     ]);
                     continue;
                 }
@@ -79,12 +91,10 @@ class ProcessOrderCreated implements ShouldQueue
                 $newStock = $product->stock - $item['quantity'];
 
                 if ($newStock < 0) {
-                    Log::warning('Insufficient stock for product', [
-                        'event_id' => $this->event_id,
+                    Log::warning('Insufficient stock - cannot fulfill order item', [
                         'product_id' => $product->id,
                         'current_stock' => $product->stock,
                         'requested_quantity' => $item['quantity'],
-                        'correlation_id' => $this->correlation_id,
                     ]);
                     // Do not allow negative stock, but don't fail the job
                     // Log the event for manual review
@@ -93,12 +103,10 @@ class ProcessOrderCreated implements ShouldQueue
 
                 $product->update(['stock' => $newStock]);
 
-                Log::info('Product stock updated', [
-                    'event_id' => $this->event_id,
+                Log::info('Product stock deducted successfully', [
                     'product_id' => $product->id,
                     'quantity_deducted' => $item['quantity'],
                     'new_stock' => $newStock,
-                    'correlation_id' => $this->correlation_id,
                 ]);
             }
 
@@ -115,11 +123,7 @@ class ProcessOrderCreated implements ShouldQueue
                 'processed_at' => now(),
             ]);
 
-            Log::info('OrderCreated event processed successfully', [
-                'event_id' => $this->event_id,
-                'order_id' => $this->order_id,
-                'correlation_id' => $this->correlation_id,
-            ]);
+            Log::info('OrderCreated event processing completed successfully');
         });
     }
 
@@ -128,10 +132,17 @@ class ProcessOrderCreated implements ShouldQueue
      */
     public function failed(\Throwable $exception): void
     {
-        Log::critical('ProcessOrderCreated job failed', [
+        $correlationId = $this->correlation_id ?: 'unknown';
+        
+        Log::critical('ProcessOrderCreated job failed permanently', [
+            'service' => 'product-service',
+            'job' => 'ProcessOrderCreated',
             'event_id' => $this->event_id,
             'order_id' => $this->order_id,
-            'error' => $exception->getMessage(),
+            'correlation_id' => $correlationId,
+            'exception' => get_class($exception),
+            'message' => $exception->getMessage(),
+            'attempts' => $this->attempts(),
         ]);
     }
 }

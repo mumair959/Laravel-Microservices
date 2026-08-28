@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Ramsey\Uuid\Uuid;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -23,6 +24,12 @@ class SetCorrelationId
         
         // Store in request for logging
         $request->attributes->set('correlation_id', $correlationId);
+        
+        // Set global log context
+        Log::withContext([
+            'service' => config('app.service_name', 'auth-service'),
+            'correlation_id' => $correlationId,
+        ]);
         
         // Process the request
         $response = $next($request);

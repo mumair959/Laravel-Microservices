@@ -16,15 +16,20 @@ class EventController extends Controller
      */
     public function orderCreated(Request $request): JsonResponse
     {
+        $correlationId = $request->header('X-Correlation-ID', '');
+        
+        // Set log context
+        Log::withContext([
+            'service' => 'product-service',
+            'correlation_id' => $correlationId,
+        ]);
+
         // Verify service-to-service authentication
         $serviceSecret = $request->header('X-Service-Secret');
         $expectedSecret = config('services.order_service.event_secret');
 
         if (!$serviceSecret || $serviceSecret !== $expectedSecret) {
-            Log::warning('Unauthorized event request', [
-                'ip' => $request->ip(),
-            ]);
-
+            Log::warning('Unauthorized event request received');
             return response()->json([
                 'success' => false,
                 'message' => 'Unauthorized',
@@ -44,8 +49,8 @@ class EventController extends Controller
                 'total_amount' => 'required|numeric',
             ]);
         } catch (ValidationException $e) {
-            Log::warning('Invalid event payload', [
-                'errors' => $e->errors(),
+            Log::warning('Invalid event payload received', [
+                'errors' => array_keys($e->errors()),
             ]);
 
             return response()->json([
@@ -56,9 +61,14 @@ class EventController extends Controller
         }
 
         try {
+            Log::info('OrderCreated event received', [
+                'event_id' => $validated['event_id'],
+                'order_id' => $validated['order_id'],
+                'user_id' => $validated['user_id'],
+                'item_count' => count($validated['items']),
+            ]);
+
             // Dispatch the job to process the event asynchronously
-            $correlationId = $request->header('X-Correlation-ID', '');
-            
             ProcessOrderCreated::dispatch(
                 event_id: $validated['event_id'],
                 order_id: $validated['order_id'],
@@ -68,10 +78,9 @@ class EventController extends Controller
                 correlation_id: $correlationId,
             );
 
-            Log::info('OrderCreated event accepted and queued', [
+            Log::info('OrderCreated event queued for processing', [
                 'event_id' => $validated['event_id'],
                 'order_id' => $validated['order_id'],
-                'correlation_id' => $correlationId,
             ]);
 
             return response()->json([
@@ -79,9 +88,10 @@ class EventController extends Controller
                 'message' => 'Event accepted',
             ], 202);
         } catch (\Exception $e) {
-            Log::error('Failed to queue event', [
-                'event_id' => $validated['event_id'],
+            Log::error('Failed to queue event for processing', [
+                'event_id' => $validated['event_id'] ?? 'unknown',
                 'error' => $e->getMessage(),
+                'exception' => get_class($e),
             ]);
 
             return response()->json([
